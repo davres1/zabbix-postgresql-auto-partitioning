@@ -17,7 +17,7 @@ dbowner=zabbix
 #   "trends*"  tables:  monthly partitions ("month")
 #
 #   You can change the defaults further down in section "add_partition_triggers"
-#   
+#
 #   Settings available:
 #     "day"   - create daily partitions
 #     "month" - create monthly partitions
@@ -72,11 +72,13 @@ create_trigger_function () {
         enddate    text;
         create_table_part text;
         create_index_part text;
+        TG1 text;
 
       BEGIN
         BEGIN
           selector = TG_ARGV[0];
-     
+          TG1 = TG_ARGV[1];
+
           IF selector = 'day' THEN
             timeformat := 'YYYY_MM_DD';
           ELSIF selector = 'month' THEN
@@ -84,13 +86,13 @@ create_trigger_function () {
           ELSE
             RAISE EXCEPTION 'zbx_part_trigger_func: Specify "day" or "month" for interval selector instead of "%"', selector;
           END IF;
-     
+
           _interval := '1 ' || selector;
-          tablename :=  TG_TABLE_NAME || '_p' || to_char(to_timestamp(NEW.clock), timeformat);
-     
-          EXECUTE 'INSERT INTO ' || quote_ident(prefix) || '.' || quote_ident(tablename) || ' SELECT ($1).*' USING NEW;
+          tablename :=  quote_ident(TG1) || '_p' || to_char(to_timestamp(NEW.clock), timeformat);
+
+          EXECUTE format('INSERT INTO ' || quote_ident(prefix) || '.' || quote_ident(tablename) || ' SELECT ($1).*') USING NEW;
           RETURN NULL;
-     
+
         /* trap when table partition does not yet exist: create the table partition and then insert */
         EXCEPTION
           WHEN undefined_table THEN
@@ -99,20 +101,20 @@ create_trigger_function () {
             create_table_part := 'CREATE TABLE IF NOT EXISTS ' || quote_ident(prefix) || '.' || quote_ident(tablename)
                               || ' (CHECK ((clock >= ' || quote_literal(startdate)
                               || ' AND clock < ' || quote_literal(enddate)
-                              || '))) INHERITS (' || TG_TABLE_NAME || ')';
+                              || '))) INHERITS (' || quote_ident(TG1) || ')';
             create_index_part := 'CREATE INDEX IF NOT EXISTS ' || quote_ident(tablename)
                               || '_1 on ' || quote_ident(prefix) || '.' || quote_ident(tablename) || '(itemid,clock)';
-            EXECUTE create_table_part;
-            EXECUTE create_index_part;
+            EXECUTE format(create_table_part);
+            EXECUTE format(create_index_part);
             --insert it again
-            EXECUTE 'INSERT INTO ' || quote_ident(prefix) || '.' || quote_ident(tablename) || ' SELECT ($1).*' USING NEW;
+            EXECUTE format('INSERT INTO ' || quote_ident(prefix) || '.' || quote_ident(tablename) || ' SELECT ($1).*') USING NEW;
             RETURN NULL;
         END;
 
       /* trap race condition where a parallel thread beat us creating the table partition: re-try the original insert */
       EXCEPTION
         WHEN duplicate_table THEN
-          EXECUTE 'INSERT INTO ' || quote_ident(prefix) || '.' || quote_ident(tablename) || ' SELECT ($1).*' USING NEW;
+          EXECUTE format('INSERT INTO ' || quote_ident(prefix) || '.' || quote_ident(tablename) || ' SELECT ($1).*') USING NEW;
           RETURN NULL;
       END;
     $BODY$
@@ -142,7 +144,7 @@ create_cleanup_function () {
         table_ts_len  integer;
         table_ts      timestamp;
         min_ts        timestamp;
-    
+
       BEGIN
         IF partition_interval NOT IN ('day','month') THEN
           RAISE EXCEPTION 'Please specify "day" or "month" for partition_interval instead of "%"', partition_interval;
@@ -164,7 +166,7 @@ create_cleanup_function () {
 
             IF table_ts < min_ts THEN
               RAISE NOTICE '  Dropping partition table %.%', quote_ident(prefix), quote_ident(result.tablename);
-              EXECUTE 'DROP TABLE ' || quote_ident(prefix) || '.' || quote_ident(result.tablename) || ';';
+              EXECUTE format('DROP TABLE ' || quote_ident(prefix) || '.' || quote_ident(result.tablename) || ';');
             END IF;
 
           END IF;
@@ -190,13 +192,20 @@ add_partition_triggers () {
   date +"%Y-%m-%d %H:%M:%S %Z"
   psql -Xe -v ON_ERROR_STOP=on ${dbname} <<EOF
     SET ROLE ${dbowner};
-    CREATE TRIGGER zbx_partition_trg BEFORE INSERT ON history           FOR EACH ROW EXECUTE PROCEDURE zbx_part_trigger_func('day');
-    CREATE TRIGGER zbx_partition_trg BEFORE INSERT ON history_uint      FOR EACH ROW EXECUTE PROCEDURE zbx_part_trigger_func('day');
-    CREATE TRIGGER zbx_partition_trg BEFORE INSERT ON history_str       FOR EACH ROW EXECUTE PROCEDURE zbx_part_trigger_func('day');
-    CREATE TRIGGER zbx_partition_trg BEFORE INSERT ON history_text      FOR EACH ROW EXECUTE PROCEDURE zbx_part_trigger_func('day');
-    CREATE TRIGGER zbx_partition_trg BEFORE INSERT ON history_log       FOR EACH ROW EXECUTE PROCEDURE zbx_part_trigger_func('day');
-    CREATE TRIGGER zbx_partition_trg BEFORE INSERT ON trends            FOR EACH ROW EXECUTE PROCEDURE zbx_part_trigger_func('month');
-    CREATE TRIGGER zbx_partition_trg BEFORE INSERT ON trends_uint       FOR EACH ROW EXECUTE PROCEDURE zbx_part_trigger_func('month');
+    DROP TRIGGER IF EXISTS zbx_partition_trg on history;
+    CREATE TRIGGER zbx_partition_trg BEFORE INSERT ON history           FOR EACH ROW WHEN (pg_trigger_depth() < 1) EXECUTE PROCEDURE zbx_part_trigger_func('day','history');
+    DROP TRIGGER IF EXISTS zbx_partition_trg on history_uint;
+    CREATE TRIGGER zbx_partition_trg BEFORE INSERT ON history_uint      FOR EACH ROW WHEN (pg_trigger_depth() < 1) EXECUTE PROCEDURE zbx_part_trigger_func('day','history_uint');
+    DROP TRIGGER IF EXISTS zbx_partition_trg on history_str;
+    CREATE TRIGGER zbx_partition_trg BEFORE INSERT ON history_str       FOR EACH ROW WHEN (pg_trigger_depth() < 1) EXECUTE PROCEDURE zbx_part_trigger_func('day','history_str');
+    DROP TRIGGER IF EXISTS zbx_partition_trg on history_text;
+    CREATE TRIGGER zbx_partition_trg BEFORE INSERT ON history_text      FOR EACH ROW WHEN (pg_trigger_depth() < 1) EXECUTE PROCEDURE zbx_part_trigger_func('day','history_text');
+    DROP TRIGGER IF EXISTS zbx_partition_trg on history_log;
+    CREATE TRIGGER zbx_partition_trg BEFORE INSERT ON history_log       FOR EACH ROW WHEN (pg_trigger_depth() < 1) EXECUTE PROCEDURE zbx_part_trigger_func('day','history_log');
+    DROP TRIGGER IF EXISTS zbx_partition_trg on trends;
+    CREATE TRIGGER zbx_partition_trg BEFORE INSERT ON trends            FOR EACH ROW WHEN (pg_trigger_depth() < 1) EXECUTE PROCEDURE zbx_part_trigger_func('month','trends');
+    DROP TRIGGER IF EXISTS zbx_partition_trg on trends_uint;
+    CREATE TRIGGER zbx_partition_trg BEFORE INSERT ON trends_uint       FOR EACH ROW WHEN (pg_trigger_depth() < 1) EXECUTE PROCEDURE zbx_part_trigger_func('month','trends_uint');
 EOF
   rc=$?
   if [[ $rc -eq 0 ]]; then
@@ -226,4 +235,3 @@ if [[ ! -d ${logdir} ]]; then
 fi
 
 main 2>&1 | tee -a ${logfile}
-
