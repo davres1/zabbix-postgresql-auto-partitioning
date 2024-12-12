@@ -33,13 +33,13 @@ drop_partition_triggers () {
   echo 'drop_partitions ------------------------------------------------'
   date +"%Y-%m-%d %H:%M:%S %Z"
   psql -Xe -v ON_ERROR_STOP=on ${dbname} <<EOF
-    DROP TRIGGER zbx_partition_trg ON history;
-    DROP TRIGGER zbx_partition_trg ON history_uint;
-    DROP TRIGGER zbx_partition_trg ON history_str;
-    DROP TRIGGER zbx_partition_trg ON history_text;
-    DROP TRIGGER zbx_partition_trg ON history_log;
-    DROP TRIGGER zbx_partition_trg ON trends;
-    DROP TRIGGER zbx_partition_trg ON trends_uint;
+    DROP TRIGGER IF EXISTS  zbx_partition_trg ON history;
+    DROP TRIGGER IF EXISTS  zbx_partition_trg ON history_uint;
+    DROP TRIGGER IF EXISTS  zbx_partition_trg ON history_str;
+    DROP TRIGGER IF EXISTS  zbx_partition_trg ON history_text;
+    DROP TRIGGER IF EXISTS  zbx_partition_trg ON history_log;
+    DROP TRIGGER IF EXISTS  zbx_partition_trg ON trends;
+    DROP TRIGGER IF EXISTS  zbx_partition_trg ON trends_uint;
 EOF
   rc=$?
   if [[ $rc -eq 0 ]]; then
